@@ -19,7 +19,50 @@ $('tabs').innerHTML=s.lineups.map((q,i)=>'<button class="'+(i===active?'active':
 document.querySelectorAll('[data-pos]').forEach(sel=>{let p=sel.dataset.pos;sel.innerHTML='<option value="">— Kies —</option>'+s.available.map(n=>'<option value="'+n+'">'+n+'</option>').join('');sel.value=s.lineups[active][p]||'';sel.onchange=()=>{s.lineups[active][p]=sel.value;store();render()}});let on=Object.values(s.lineups[active]).filter(Boolean);$('bench').textContent=s.available.filter(n=>!on.includes(n)).join(', ')||'Geen';let warnings=[];if(new Set(on).size!==on.length)warnings.push('Een speler staat dubbel opgesteld.');if(on.length<6)warnings.push('Niet alle posities zijn gevuld.');for(let p of keys){let n=s.lineups[active][p];if(n&&s.prefs[n]?.avoid.includes(p))warnings.push(n+' staat op een te vermijden positie.')}const keeperCounts={};s.lineups.forEach(q=>{if(q.K)keeperCounts[q.K]=(keeperCounts[q.K]||0)+1});if(Object.values(keeperCounts).some(n=>n>1)&&s.lineups.length===4)warnings.push('Een keeper is meerdere keren ingedeeld.');$('warnings').innerHTML=warnings.map(w=>'<p class="warning">⚠ '+escapeHtml(w)+'</p>').join('')||'<p class="good">✓ Geen directe conflicten in dit blok.</p>';renderStats();renderPrint();renderHistory()}
 function renderStats(){let stats=Object.fromEntries(s.available.map(n=>[n,{blocks:0,keepers:0,front:0}]));s.lineups.forEach(q=>keys.forEach(p=>{let n=q[p];if(stats[n]){stats[n].blocks++;if(p==='K')stats[n].keepers++;if(p==='LV'||p==='RV')stats[n].front++}}));$('stats').innerHTML='<table><tr><th>Speler</th><th>Minuten</th><th>Keeper</th><th>Voorin</th></tr>'+s.available.map(n=>'<tr><td>'+n+'</td><td>'+stats[n].blocks*Number(s.interval)+'</td><td>'+stats[n].keepers+'×</td><td>'+stats[n].front+'×</td></tr>').join('')+'</table>'}
 function recentKeepers(){const h=s.history.filter(x=>x.date&&x.date!==s.date).sort((a,b)=>b.date.localeCompare(a.date));if(!h.length)return new Set();return new Set((h[0].lineups||[]).map(q=>q.K).filter(Boolean))}
-function generate(){if(s.available.length<6){alert('Selecteer minimaal 6 spelers.');return}const n=slots(),counts=Object.fromEntries(s.available.map(p=>[p,0])),keepers=Object.fromEntries(s.available.map(p=>[p,0])),fronts=Object.fromEntries(s.available.map(p=>[p,0])),recent=recentKeepers(),result=[];let previous=new Set();for(let i=0;i<n;i++){const q=blank(),used=new Set();const order=['K','LV','RV','M','LA','RA'];for(const p of order){const candidates=s.available.filter(name=>!used.has(name));const scored=candidates.map(name=>{const pr=s.prefs[name];let cost=counts[name]*100+(pr.avoid.includes(p)?300:0)-(pr.fav.includes(p)?24:0)+(previous.has(name)?-3:0);if(p==='K')cost+=keepers[name]*95+(recent.has(name)?190:0);if(p==='LV'||p==='RV')cost+=fronts[name]*20;cost+=(players.indexOf(name)+i*3)%8;return {name,cost}}).sort((a,b)=>a.cost-b.cost);let chosen=scored[0]?.name;if(chosen){q[p]=chosen;used.add(chosen);counts[chosen]++;if(p==='K')keepers[chosen]++;if(p==='LV'||p==='RV')fronts[chosen]++}}result.push(q);previous=used} s.lineups=result;store();render();$('genstatus').textContent='Voorstel gegenereerd. Controleer voorkeuren en speelminuten; de generator is een heuristiek, geen garantie op de optimale verdeling.'}
+function generate(){
+if(s.available.length<6){alert('Selecteer minimaal 6 spelers.');return}
+const interval=Number(s.interval),n=slots(),recent=recentKeepers(),result=[];
+const played=Object.fromEntries(s.available.map(x=>[x,0])),kept=Object.fromEntries(s.available.map(x=>[x,0])),front=Object.fromEntries(s.available.map(x=>[x,0]]));
+const prefCost=(name,p)=>{const pr=s.prefs[name]||{fav:[],avoid:[]};return (pr.avoid.includes(p)?400:0)-(pr.fav.includes(p)?28:0)};
+function pick(available,p,previous){
+return available.slice().sort((a,b)=>score(a,p,previous)-score(b,p,previous))[0];
+}
+function score(name,p,previous){
+let v=played[name]*70+prefCost(name,p)+(previous&&previous[p]===name?-75:0);
+if(p==='K')v+=kept[name]*110+(recent.has(name)?230:0);
+if(p==='LV'||p==='RV')v+=front[name]*18;
+return v+players.indexOf(name)*0.01;
+}
+function count(q){keys.forEach(p=>{let name=q[p];if(name){played[name]++;if(p==='K')kept[name]++;if(p==='LV'||p==='RV')front[name]++}})}
+function firstLineup(previous){
+const q=blank(),used=new Set();
+for(const p of ['K','LV','RV','M','LA','RA']){let name=pick(s.available.filter(x=>!used.has(x)),p,previous);q[p]=name;used.add(name)}
+return q;
+}
+if(interval===6){
+for(let i=0;i<n;i++){
+if(i%2===0){let q=firstLineup(result[i-1]);result.push(q);count(q);continue}
+const prev=result[i-1],bench=s.available.filter(x=>!Object.values(prev).includes(x)),q={...prev};
+if(bench.length){
+let options=[];
+for(const p of keys){for(const name of bench){
+const outgoing=prev[p];
+let cost=score(name,p,null)-played[outgoing]*65+prefCost(name,p)*0.2;
+if(p==='K')cost+=250;
+if(s.prefs[outgoing]?.avoid.includes(p))cost-=50;
+options.push({p,name,cost});
+}}
+options.sort((a,b)=>a.cost-b.cost);
+const best=options[0];q[best.p]=best.name;
+}
+result.push(q);count(q);
+}
+}else{
+for(let i=0;i<n;i++){let q=firstLineup(result[i-1]);result.push(q);count(q)}
+}
+s.lineups=result;store();render();
+$('genstatus').textContent=interval===6?'Voorstel gemaakt: binnen elk kwart van 12 minuten wisselt maximaal één speler na 6 minuten; alle andere spelers behouden hun positie.':'Voorstel gemaakt met wissels per 12 minuten. Controleer speeltijd en voorkeuren.';
+}
 function summary(record=s){return 'HVV JO10-02 · '+(record.venue||'')+' vs '+(record.opponent||'...')+' · '+(record.date||'')+'\n'+record.lineups.map((q,i)=>'Blok '+(i+1)+' ('+(i*record.interval)+'–'+((i+1)*record.interval)+' min): '+positions.map(([p,l])=>l+': '+(q[p]||'—')).join(' | ')+'; Wissel: '+record.available.filter(n=>!Object.values(q).includes(n)).join(', ')).join('\n')}
 function renderPrint(){
 const head=$('print-heading');head.outerHTML='<div id="print-heading" class="poster-head"></div>';
